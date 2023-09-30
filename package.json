@@ -1,0 +1,27 @@
+{
+  "name": "com.jng.controller",
+  "displayName": "Physics Character Controller",
+  "version": "0.0.1",
+  "unity": "2019.4",
+  "description": "Physics based character controller for proyects. \n\nRuntime and editor custom scripts  \n\n ",
+  "keywords": [
+    "physics",
+    "controller",
+    "character",
+    "fps",
+    "tps",
+    "plataform",
+    "orbit",
+    "cutscene"
+  ],
+  "category": "physics",
+  "dependencies": {
+    "com.unity.inputsystem": "1.0.0"
+  },
+  "documentationUrl": "no url data",
+  "repository": {
+    "url": "--",
+    "type": "git",
+    "revision": ""
+  }
+}

@@ -34,6 +34,13 @@ namespace GameEditor
             EditorGUILayout.PropertyField(serializedObject.FindProperty("inputRotationRate"));
 
             GUILayout.Space(5);
+            EditorGUILayout.LabelField("Jump", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpHold"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpHoldSmooth"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpHoldMin"));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpHoldMax"));
+
+            GUILayout.Space(5);
             EditorGUI.indentLevel = 1;
             LimitControl(serializedObject.FindProperty("rollControlLimit"));
             LimitControl(serializedObject.FindProperty("pitchControlLimit"));

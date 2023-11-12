@@ -1,9 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
-using static PlasticPipe.PlasticProtocol.Messages.Serialization.ItemHandlerMessagesSerialization;
 
 namespace GameEngine
 {
@@ -21,21 +21,29 @@ namespace GameEngine
         [HideInInspector] public bool cursorVisible = true;
         [HideInInspector] public CursorLockMode cursorLockMode;
 
+        [HideInInspector] public bool jumpHold = false;
+        [HideInInspector] public float jumpHoldSmooth = 2f;
+        [HideInInspector] public float jumpHoldMin = 1.0f;
+        [HideInInspector] public float jumpHoldMax = 2.2f;
+
         private Vector3 m_look;
         private Quaternion m_axisDelta;
-        private CharacterController characterController;
+        private CharacterController m_controller;
+        private CharacterControllerEvent m_controllerEvent;
+        private bool m_jumpHolded = false;
+        private float m_jumpHoldValue = 0f;
 
         void Start()
         {
-            characterController = GetComponent<CharacterController>();
+            m_controller = GetComponent<CharacterController>();
             Cursor.lockState = cursorLockMode;
             Cursor.visible = cursorVisible;
         }
 
         private void Update()
         {
-            float x = m_look.x * inputPitchScale * Time.deltaTime;
-            float y = m_look.y * inputYawScale * Time.deltaTime;
+            float x = m_look.x * inputYawScale * Time.deltaTime;
+            float y = m_look.y * inputPitchScale* Time.deltaTime;
             float z = m_look.z * inputRollScale * Time.deltaTime;
             
             m_axisDelta = target.rotation;
@@ -49,6 +57,12 @@ namespace GameEngine
             angles.z = ClampAngle(angles.z, rollControlLimit.min, rollControlLimit.max);
 
             target.localEulerAngles = angles;
+
+            if (m_jumpHolded)
+            {
+                m_jumpHoldValue += Time.deltaTime;
+                m_jumpHoldValue = Mathf.Clamp(m_jumpHoldValue, jumpHoldMin, jumpHoldMax);
+            }
         }
 
         #region INTERNAL
@@ -68,12 +82,31 @@ namespace GameEngine
         #region INPUT
         private void OnMovement(InputValue value)
         {
-            characterController.Move(value.Get<Vector2>());
+            m_controller.Move(value.Get<Vector2>());
+            if(m_controllerEvent)
+                m_controllerEvent.OnMovement.Invoke(value.Get<Vector2>());
         }
 
         private void OnJump(InputValue value)
         {
-            characterController.Jump();
+            if (!jumpHold)
+            {
+                m_controller.Jump();
+                if (m_controllerEvent)
+                    m_controllerEvent.OnJumpStart.Invoke();
+            }
+            else
+            {
+                m_jumpHolded = value.isPressed;
+                if(!value.isPressed)
+                {
+                    m_controller.Jump(m_jumpHoldValue);
+                    m_jumpHoldValue = 0;
+                    if (m_controllerEvent)
+                        m_controllerEvent.OnJumpStart.Invoke();
+                }
+            }
+
         }
 
         private void OnLook(InputValue value)

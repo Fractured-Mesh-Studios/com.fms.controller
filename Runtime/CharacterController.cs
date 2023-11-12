@@ -1,9 +1,12 @@
+using log4net.Filter;
 using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading.Tasks;
+using UnityEditor;
 using UnityEngine;
-using UnityEngine.Events;
-using UnityEngine.InputSystem;
-
+using UnityEngine.UIElements;
 
 namespace GameEngine
 {
@@ -12,250 +15,347 @@ namespace GameEngine
     [RequireComponent(typeof(CapsuleCollider))]
     public class CharacterController : MonoBehaviour
     {
-        public enum MovementMode
-        {
-            None,
-            Force,
-            Velocity,
-        }
-
         //movement
-        [HideInInspector]public MovementMode mode = MovementMode.Velocity;
-        [HideInInspector]public float speed = 10f;
-        [HideInInspector]public float speedFactor = 1f;
-        [HideInInspector]public float threshold = 0.15f;
-        [HideInInspector]public float dampSpeedUp = 0.2f;
-        [HideInInspector]public float dampSpeedDown = 0.1f;
-        [HideInInspector]public float acceleration = 8;
-        [HideInInspector]public float maxAccelerationFactor = 4;
-        [HideInInspector]public AnimationCurve accelerationFactorFromDot = AnimationCurve.EaseInOut(-1f, 2f, 1f, 1f);
-        [HideInInspector]public float maxAccelerationForce = 20;
-        [HideInInspector]public AnimationCurve maxAccelerationForceFactorFromDot = AnimationCurve.EaseInOut(-1f, 2f, 1f, 1f);
-        //ground
-        [HideInInspector]public float groundRadius = 0.15f;
-        [HideInInspector]public float groundDistance = 1f;
-        [HideInInspector]public Vector3 groundDirection = Vector3.down;
-        //slope
-        [HideInInspector]public float slopeAngle = 55f;
-        [HideInInspector]public float slopeGravityMultiplier = 6f;
-        [HideInInspector]public float slopeDistance = 1.0f;
-        [HideInInspector]public float slopeRadius = 0.1f;
-        [HideInInspector]public bool slopeLock = true;
-        //step
-        [HideInInspector]public float stepOffset = 0.1f;
-        [HideInInspector]public float stepHeight = 0.2f;
-        [HideInInspector]public float stepDistance = 0.15f;
+        [HideInInspector] public float speed = 10f;
+        [HideInInspector] public float speedFactor = 1f;
+        [HideInInspector] public float threshold = 0.15f;
+        [HideInInspector] public float airControl = 0f;
+        [HideInInspector] public float dampSpeedUp = 0.2f;
+        [HideInInspector] public float dampSpeedDown = 0.1f;
+        //ground          
+        [HideInInspector] public bool groundForce;
+        [HideInInspector] public float groundSpringForce = 1f;
+        [HideInInspector] public float groundSpringDamper = 1;
+        [HideInInspector] public float groundRadius = 0.15f;
+        [HideInInspector] public float groundDistance = 1f;
+        [HideInInspector] public Vector3 groundDirection = Vector3.down;
+        [HideInInspector] public ForceMode groundForceMode = ForceMode.Force;
+        //slope           
+        [HideInInspector] public float slopeAngle = 55f;
+        [HideInInspector] public float slopeGravityMultiplier = 6f;
+        [HideInInspector] public float slopeDistance = 1.0f;
+        [HideInInspector] public float slopeRadius = 0.1f;
+        [HideInInspector] public bool slopeLock = true;
+        //step            
+        [HideInInspector] public float stepOffset = 0.1f;
+        [HideInInspector] public float stepHeight = 0.2f;
+        [HideInInspector] public float stepDistance = 0.15f;
+        [HideInInspector] public float stepSpringForce = 10f;
+        [HideInInspector] public float stepSpringDamp = 1f;
+        [HideInInspector] public float stepSpringMin = 0f;
+        [HideInInspector] public float stepSpringMax = 2f;
+        [HideInInspector] public uint stepIteration = 10;
+        [HideInInspector] public uint stepIterationThreshold = 20;
         //jump
-        [HideInInspector]public float jumpForce = 10f;
-        //wall
-        [HideInInspector]public float wallHeight = 0f;
-        [HideInInspector]public float wallDistance = 1f;
-        [HideInInspector]public new Transform camera = null;
-       
-        public bool isGrounded {  get; private set; }
+        [HideInInspector] public bool jump = true;
+        [HideInInspector] public float jumpForce = 10f;
+        [HideInInspector] public int jumpCount = 1;
+        [HideInInspector] public float jumpDelay = 0.1f;
+        [HideInInspector] public float jumpMemory = 0f;
+        //wall            
+        [HideInInspector] public float wallHeight = 0f;
+        [HideInInspector] public float wallDistance = 1f;
+        [HideInInspector] public new Transform camera = null;
+
+        //getters & setters
+        public bool isGrounded { get; private set; }
         public bool isSloped { get; private set; }
-        public bool isJumping {  get; private set; }
-        public bool isWall {  get; private set; }
-        public bool isStep {  get; private set; }
+        public bool isJumping { get; private set; }
+        public bool isTouchingWall { get; private set; }
+        public bool isTouchingStep { get; private set; }
+        public Vector3 direction { get { return m_direction.normalized; } }
+        public Vector3 velocity { get { return m_velocity; } }
 
-
-        [SerializeField][HideInInspector]private LayerMask m_slopeMask;
-        [SerializeField][HideInInspector]private LayerMask m_groundMask;
+        //private
+        [SerializeField][HideInInspector] private LayerMask m_slopeMask;
+        [SerializeField][HideInInspector] private LayerMask m_groundMask;
         private Rigidbody m_rigidbody;
-        private Rigidbody m_groundRigidbody;
         private CapsuleCollider m_collider;
         private Transform m_camera;
         private Vector3 m_velocity;
-        private Vector3 m_aceleration;
+        private Vector3 m_lastVelocity;
         private Vector3 m_direction;
-        private Vector3 m_slopeNormal;
+        private Vector3 m_lastDirection;
         private Vector3 m_movementDirection;
+        private Vector3 m_stepHit;
+        private Vector3 m_slopeNormal;
+        private Vector3 m_stepProyectedDirection;
         private float m_speed;
+        private float m_slopeAngle;
         private float m_staticFriction;
         private float m_dynamicFriction;
-        private bool m_onSlopeAngle;
+        private float m_groundDistance;
+        private float m_stepHitDistance;
+        private bool m_isStepUpGroundForce;
+        private bool m_isColliding;
+        private int m_jumpCount;
+        private int m_jumpMemoryState = -1;
+        private int m_stepUpState = -1;
+        private int m_stepHitCount = 0;
+        private int m_stepIterationCount = 0;
         private PhysicMaterialCombine m_frictionCombine;
 
-        protected virtual void Awake () 
+        protected virtual void Awake()
         {
             m_rigidbody = GetComponent<Rigidbody>();
             m_collider = GetComponent<CapsuleCollider>();
-            if(m_collider)
+            if (m_collider)
             {
                 m_staticFriction = m_collider.material.staticFriction;
                 m_dynamicFriction = m_collider.material.dynamicFriction;
                 m_frictionCombine = m_collider.material.frictionCombine;
-            }    
+            }
             m_camera = camera ? camera : Camera.main.transform;
+            m_groundDistance = groundDistance;
+            m_rigidbody.interpolation = RigidbodyInterpolation.None;
         }
 
         protected virtual void Update()
         {
+            Vector3 wallNormal;
+
             //Checks
             isGrounded = CheckGround();
             isSloped = CheckSlopeAngle();
-            isWall = CheckWall().Item1;
-            isStep = CheckStep();
+            isTouchingWall = CheckWall(out wallNormal);
+            isTouchingStep = CheckStep(50);
         }
 
-        protected virtual void FixedUpdate () 
+        protected virtual void FixedUpdate()
         {
             CalculateMovement();
+            CalculateGroundForce();
+            CalculateStepUpForce();
         }
 
-        #region CHECKS
-        private bool CheckStep()
+        #region COLLISION
+        protected virtual void OnCollisionEnter(Collision collision)
         {
-            bool tmpStep = false;
-            Vector3 bottomStepPos = transform.position - (groundDirection * groundDistance) + new Vector3(0f, 0.05f, 0f);
+            m_isColliding = true;
 
-            RaycastHit stepLowerHit;
-            if (Physics.Raycast(bottomStepPos, Vector3.forward, out stepLowerHit, stepOffset, m_groundMask))
+            if (m_stepUpState > 1)
             {
-                RaycastHit stepUpperHit;
-                if (RoundValue(stepLowerHit.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, stepHeight, 0f), Vector3.forward, out stepUpperHit, stepDistance + 0.05f, m_groundMask))
+                m_isStepUpGroundForce = true;
+            }
+        }
+
+        protected virtual void OnCollisionStay(Collision collision)
+        {
+            if (m_stepUpState > 1)
+            {
+                m_isStepUpGroundForce = true;
+            }
+
+            if(m_isColliding && isGrounded && airControl > 0)
+            {
+
+            }
+        }
+
+        protected virtual void OnCollisionExit(Collision collision)
+        {
+            m_isColliding = false;
+            m_isStepUpGroundForce = false;
+            /*
+            if (m_stepUpState < 0)
+            {
+                m_isStepUpGroundForce = false;
+            }*/
+        }
+        #endregion
+
+        #region CHECKS
+        private bool CheckStep(int stepAngle)
+        {
+            Vector3 position, direction;
+            Vector3 forward = transform.forward;
+
+            m_stepHitCount = 0;
+            m_stepUpState = -1;
+
+            RaycastHit stepHit;
+            for (int i = -1; i < 2; i++)
+            {
+                position = transform.position + Vector3.up * stepOffset;
+                direction = Quaternion.AngleAxis(stepAngle * i, transform.up) * forward;
+
+                stepDistance = stepDistance != 0 ? stepDistance : 0.1f;
+                if (Physics.Raycast(position, direction, out stepHit, stepDistance, m_groundMask))
                 {
-                    //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                    tmpStep = true;
+                    RaycastHit hit;
+                    m_stepProyectedDirection = GetStepUpDirection();
+                    m_stepHitDistance = stepHit.distance;
+
+                    if (RoundValue(stepHit.normal.y) == 0 && !Physics.Raycast(position + Vector3.up * stepHeight, direction, out hit, stepDistance, m_groundMask))
+                    {
+                        float angle = Vector3.Angle(forward, m_movementDirection);
+
+                        if (m_movementDirection.magnitude != 0 && angle <= stepAngle)
+                        {
+                            //m_rigidbody.position -= new Vector3(0, -stepSmooth * Time.deltaTime, 0);
+                            m_stepUpState = 2;
+                        }
+                        else
+                        {
+                            m_stepUpState = 1;
+                        }
+
+                        m_stepHitCount++;
+                    }
                 }
             }
 
-            RaycastHit stepLowerHit45;
-            if (Physics.Raycast(bottomStepPos, Quaternion.AngleAxis(45, transform.up) * Vector3.forward, out stepLowerHit45, stepOffset, m_groundMask))
-            {
-                RaycastHit stepUpperHit45;
-                if (RoundValue(stepLowerHit45.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, stepHeight, 0f), Quaternion.AngleAxis(45, Vector3.up) * Vector3.forward, out stepUpperHit45, stepDistance + 0.05f, m_groundMask))
-                {
-                    //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                    tmpStep = true;
-                }
-            }
 
-            RaycastHit stepLowerHitMinus45;
-            if (Physics.Raycast(bottomStepPos, Quaternion.AngleAxis(-45, transform.up) * Vector3.forward, out stepLowerHitMinus45, stepOffset, m_groundMask))
-            {
-                RaycastHit stepUpperHitMinus45;
-                if (RoundValue(stepLowerHitMinus45.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, stepHeight, 0f), Quaternion.AngleAxis(-45, Vector3.up) * Vector3.forward, out stepUpperHitMinus45, stepDistance + 0.05f, m_groundMask))
-                {
-                    //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                    tmpStep = true;
-                }
-            }
 
-            return tmpStep;
+            return m_stepHitCount > 0;
         }
 
         private bool CheckGround()
         {
             RaycastHit groundHit;
-            return Physics.SphereCast(transform.position ,groundRadius, groundDirection,out groundHit, groundDistance, m_groundMask);
+            Ray groundRay = new Ray(transform.position, groundDirection);
+            if (Physics.SphereCast(groundRay, groundRadius, out groundHit, m_groundDistance, m_groundMask))
+            {
+                m_jumpCount = 0;
+                m_jumpMemoryState = 1;
+                if (isJumping)
+                {
+                    isJumping = false;
+                }
+
+                /*if(IsInvoking("JumpMemory"))
+                {
+                    CancelInvoke("JumpMemory");
+                }*/
+                return true;
+            }
+            else
+            {
+                Invoke("JumpMemory", jumpMemory);
+                return false;
+            }
         }
 
         private bool CheckSlopeAngle()
         {
-            RaycastHit slopeHit;
+            RaycastHit slopeHit, moveHit;
             if (Physics.SphereCast(transform.position, slopeRadius, groundDirection, out slopeHit, slopeDistance, m_slopeMask))
             {
-                float angle = Vector3.Angle(Vector3.up, slopeHit.normal);
+                m_slopeAngle = Vector3.Angle(Vector3.up, slopeHit.normal);
                 m_slopeNormal = slopeHit.normal;
-                return angle < slopeAngle && angle != 0;
+                if (m_slopeAngle > slopeAngle)
+                {
+                    Ray directionRay = new Ray(transform.position, m_direction.normalized);
+                    if (Physics.Raycast(directionRay, out moveHit, speed, m_groundMask))
+                    {
+                        if (moveHit.collider == slopeHit.collider)
+                        {
+                            //revisar y mejorar esta parte
+                            //codigo anterior funcional m_movementDirection = Vector3.zero;
+                            m_direction = Vector3.zero;
+                        }
+                    }
+                }
+
+                return m_slopeAngle < slopeAngle && m_slopeAngle != 0;
             }
 
             m_slopeNormal = Vector3.zero;
             return false;
         }
 
-        private Tuple<bool, Vector3> CheckWall()
+        private bool CheckWall(out Vector3 wallNormal)
         {
             bool tmpWall = false;
-            Vector3 tmpWallNormal = Vector3.zero;
+            wallNormal = Vector3.zero;
             Vector3 position = transform.position + (Vector3.up * wallHeight);
+            RaycastHit hit;
 
-            //Vector3 topWallPos = new Vector3(transform.position.x, transform.position.y + wallHeight, transform.position.z);
-            RaycastHit wallHit;
             for (int i = 0; i < 8; i++)
             {
-                if (Physics.Raycast(position, Quaternion.AngleAxis(i * 45, transform.up) * Vector3.forward, out wallHit, wallDistance, m_groundMask))
+                if (Physics.Raycast(position, Quaternion.AngleAxis(i * 45, transform.up) * Vector3.forward, out hit, wallDistance, m_groundMask))
                 {
-                    tmpWallNormal = wallHit.normal;
                     tmpWall = true;
+                    wallNormal = hit.normal;
+
+                    if(!isGrounded && airControl > 0 && m_isColliding)
+                    {
+                        
+                    }
+
                 }
             }
 
-            return new Tuple<bool, Vector3>(tmpWall, tmpWallNormal);
+            return tmpWall;
         }
         #endregion
 
+        #region PUBLIC
+        public void Move(Vector3 value)
+        {
+            m_movementDirection = new Vector3(value.x, 0, value.y);
+            m_movementDirection.Normalize();
+
+            if (m_movementDirection.magnitude <= 0f)
+            {
+                Task.Delay(400).ContinueWith(t => ResetDirection());
+            }
+            else
+            { 
+                m_lastDirection = m_movementDirection;
+            }
+
+        }
+
+        public void Jump(float scale = 1f)
+        {
+            if (!jump) return;
+            if (m_jumpCount < jumpCount && m_jumpMemoryState > 0)
+            {
+                m_groundDistance = 0;
+                StartCoroutine(JumpApplyForce(scale));
+            }
+        }
+        #endregion
+
+        #region PRIVATE
         private void CalculateMovement()
         {
-            if (isGrounded)
+            if (isGrounded /*|| isTouchingStep*/)
             {
                 m_collider.material.staticFriction = m_staticFriction;
                 m_collider.material.dynamicFriction = m_dynamicFriction;
                 m_collider.material.frictionCombine = m_frictionCombine;
-
                 m_rigidbody.maxLinearVelocity = Mathf.Infinity;
+
                 m_speed = speed * Mathf.Clamp01(speedFactor);
                 m_direction = RelativeTo(m_movementDirection, m_camera, true);
-                m_direction = isSloped ? ProjectOnPlane(m_direction) : m_direction;
+                m_direction.Normalize();
+                m_direction = isSloped ? Vector3.ProjectOnPlane(m_direction, m_slopeNormal) : m_direction;
                 m_direction *= m_speed;
 
-                if(m_direction.magnitude > threshold)
+                if (isTouchingStep && m_stepUpState > 1) //funciona con m_stepUpState > 0
                 {
-                    switch (mode)
-                    {
-                        case MovementMode.Velocity: 
-                            m_rigidbody.velocity = Vector3.SmoothDamp(m_rigidbody.velocity, m_direction, ref m_velocity, dampSpeedUp);
-                            break;
-                        case MovementMode.Force:
-                            Vector3 Force = Vector3.zero;
-                            //normalize the current body velocity
-                            Vector3 velNorm = m_rigidbody.velocity.normalized;
-                            //dot of the goal velocirty vs normalized velocity
-                            float velDot = Vector3.Dot(velNorm, m_movementDirection.normalized);
+                    m_movementDirection.Normalize();
+                    m_stepProyectedDirection.Normalize();
+                    m_direction = m_movementDirection + m_stepProyectedDirection;
+                    m_direction *= speed;
 
-                            Vector3 groundVel = m_groundRigidbody ? m_groundRigidbody.velocity : Vector3.zero;
+                }
+                m_direction = Vector3.ClampMagnitude(m_direction, speed);
 
-                            float accel = acceleration * accelerationFactorFromDot.Evaluate(velDot);
-
-                            //calculate new goal vel
-                            Vector3 goalVel = m_direction;
-
-                            m_velocity = Vector3.MoveTowards(m_velocity, goalVel + groundVel, accel * Time.fixedDeltaTime);
-
-                            //Calculate and clamp acceleration vector length
-                            m_aceleration = (m_velocity - m_rigidbody.velocity) / Time.fixedDeltaTime;
-
-                            float MaxAccel = maxAccelerationForce * maxAccelerationForceFactorFromDot.Evaluate(velDot) * maxAccelerationFactor;
-
-                            m_aceleration = Vector3.ClampMagnitude(m_aceleration, MaxAccel);
-                            m_rigidbody.AddForce(m_aceleration, ForceMode.Acceleration);
-                            
-                            break;
-                        default: break;
-                    }
+                if (m_direction.magnitude > threshold)
+                {
+                    m_rigidbody.velocity = Vector3.SmoothDamp(m_rigidbody.velocity, m_direction, ref m_velocity, dampSpeedUp);
                 }
                 else
                 {
-                    switch (mode)
-                    {
-                        case MovementMode.Velocity:
-                                m_rigidbody.velocity = Vector3.SmoothDamp(m_rigidbody.velocity, Vector3.zero, ref m_velocity, dampSpeedDown);
-                            break;
-                        case MovementMode.Force:
-                            break;
-                        default: break;
-                    }
-
-                    if(mode == MovementMode.Velocity)
-                    {
-                        //m_rigidbody.AddForce(-m_direction, ForceMode.Force);
-                    }
+                    m_rigidbody.velocity = Vector3.SmoothDamp(m_rigidbody.velocity, Vector3.zero, ref m_velocity, dampSpeedDown);
 
                     if (isSloped)
                     {
                         if (slopeLock)
-                        { 
+                        {
                             m_rigidbody.maxLinearVelocity = 0;
                         }
                         else
@@ -269,38 +369,127 @@ namespace GameEngine
                     }
                 }
 
+                m_lastVelocity = Vector3.ClampMagnitude(m_lastVelocity, speed);
+            }
+
+            if (!isGrounded && airControl > 0)
+            {
+                m_speed = speed * Mathf.Clamp01(speedFactor);
+                m_direction = RelativeTo(m_movementDirection, m_camera, true);
+                m_direction.Normalize();
+                m_direction *= m_speed * airControl;
+                float damp = m_direction.magnitude > threshold ? 
+                    dampSpeedUp : dampSpeedDown;
+                m_direction = Vector3.ClampMagnitude(m_direction, speed);
+
+                if (m_direction.magnitude > threshold) 
+                {
+                    m_direction = m_lastVelocity + m_direction;
+                    Vector3 acceleration = (m_direction - m_rigidbody.velocity) / Time.fixedDeltaTime;
+                    acceleration = Vector3.Scale(acceleration, Vector3.one + Physics.gravity.normalized);
+                    m_rigidbody.AddForce(acceleration, ForceMode.Acceleration);
+                }
+            }
+
+            
+        }
+
+        private void CalculateGroundForce()
+        {
+            if (isGrounded && groundForce)
+            {
+                RaycastHit groundHit;
+                Vector3 otherVel = Vector3.zero;
+                if (Physics.SphereCast(transform.position, groundRadius, groundDirection, out groundHit, m_groundMask))
+                {
+                    if (groundHit.rigidbody) {
+                        otherVel = groundHit.rigidbody.velocity;
+                    }
+                }
+
+                //calculate the dot product between ground ray and the this object velocity 
+                float rayDirVel = Vector3.Dot(groundDirection, m_rigidbody.velocity);
+                //calculate the dot product between ground ray and the other object velocity
+                float otherDirVel = Vector3.Dot(groundDirection, otherVel);
+                //set the relative distance 
+                float relVel = rayDirVel - otherDirVel;
+                //set the relative force
+                float x = groundHit.distance - groundDistance;
+
+                //Calculate damping force to set the capsule in the air
+                float SpringForce = (x * groundSpringForce) - (relVel * groundSpringDamper);
+
+                //add the force to the body object
+                m_rigidbody.AddForce(groundDirection * SpringForce, groundForceMode);
+                /*if (HitBody != null && JumpCount <= 0)
+                {
+                    HitBody.AddForceAtPosition(RayDir * -SpringForce, GroundHit.point);
+                }*/
+
             }
         }
 
-        public void Move(Vector3 value)
+        private void CalculateStepUpForce()
         {
-            m_movementDirection = new Vector3(value.x, 0, value.y);
-            m_movementDirection.Normalize();
+            if (m_isStepUpGroundForce)
+            {
+                float iterRatio = ((float)m_stepIterationCount / stepIteration);
+                float threshold = Mathf.Clamp01(stepIterationThreshold / 100f);
+
+                if(m_stepHitCount <= 0 || m_stepUpState < 2 || iterRatio <= threshold)
+                {
+                    m_isStepUpGroundForce = false;
+                    return;
+                }
+
+                RaycastHit hit;
+                if (Physics.Raycast(transform.position, groundDirection, out hit, groundDistance + stepDistance, m_groundMask))
+                {
+                    Vector3 otherVel = Vector3.zero;
+                    if (hit.rigidbody)
+                    {
+                        otherVel = hit.rigidbody.velocity;
+                    }
+
+                    float rayDot = Vector3.Dot(groundDirection, m_rigidbody.velocity);
+                    float bodyDot = Vector3.Dot(groundDirection, otherVel);
+                    float relVel = rayDot - bodyDot;
+                    float x = (hit.distance - (groundDistance + stepHeight));
+                    float ff = Mathf.Lerp(stepSpringMax, stepSpringMin, m_stepHitDistance / stepDistance);
+                    float springForce = (x * stepSpringForce * ff) - (relVel * stepSpringDamp);
+
+                    m_rigidbody.AddForce(groundDirection * springForce * m_rigidbody.mass, ForceMode.Force);
+
+                }
+            }
         }
 
-        public void Jump()
+        private IEnumerator JumpApplyForce(float scale)
         {
-            var tmpGroundDistance = groundDistance;
-            groundDistance = 0;
-            StartCoroutine(StartJump(tmpGroundDistance));
-        }
-
-        private IEnumerator StartJump(float distance)
-        {
-            yield return new WaitForSeconds(0.1f);
             isJumping = true;
-            m_rigidbody.AddForce(transform.up * jumpForce, ForceMode.Impulse);
-            StartCoroutine(EndJump(distance));
+            Vector3 direction = transform.up * m_rigidbody.mass;
+            float force = jumpForce * scale;
+            m_rigidbody.AddForce(direction * force, ForceMode.Impulse);
+            m_jumpCount++;
+            yield return new WaitForSeconds(jumpDelay);
+            StartCoroutine(JumpReset());
         }
 
-        private IEnumerator EndJump(float distance)
+        private IEnumerator JumpReset()
         {
             yield return new WaitForEndOfFrame();
-            groundDistance = distance;
+            m_groundDistance = groundDistance;
         }
 
+        private void JumpMemory()
+        {
+            m_jumpMemoryState = -1;
+            m_jumpCount = jumpCount;
+        }
+        #endregion
+
         #region INTERNAL
-        private Vector3 RelativeTo(Vector3 vector3, Transform relativeToThis, bool isPlanar = true)
+        internal Vector3 RelativeTo(Vector3 vector3, Transform relativeToThis, bool isPlanar = true)
         {
             Vector3 forward = relativeToThis.forward;
             if (isPlanar)
@@ -315,12 +504,7 @@ namespace GameEngine
             return rotation * vector3;
         }
 
-        private Vector3 ProjectOnPlane(Vector3 value)
-        {
-            return Vector3.ProjectOnPlane(value, m_slopeNormal);
-        }
-
-        private float RoundValue(float _value)
+        internal float RoundValue(float _value)
         {
             float unit = (float)Mathf.Round(_value);
 
@@ -328,670 +512,232 @@ namespace GameEngine
             else return _value;
         }
 
+        internal Vector3 GetStepUpDirection()
+        {
+            RaycastHit hit;
+            Vector3 world = GetStepHitPoint(transform.forward, (int)stepIteration).Item2;
+
+            if(Physics.Raycast(transform.position, groundDirection, out hit, Mathf.Infinity, m_groundMask))
+            {
+                return world - hit.point;
+            }
+
+            return Vector3.zero;
+        }
+
+        internal Tuple<Vector3, Vector3> GetStepHitPoint(Vector3 direction, int subdivision)
+        {
+            //los valores aca tienen que ser iguales a los valores en CheckStepUp()
+            RaycastHit hit;
+            int count = 0;
+            var offset = Vector3.up * stepOffset;
+            var height = Vector3.up * stepHeight;
+            var lerp = Vector3.Distance(height, offset) / subdivision;
+
+            Vector3 world = Vector3.zero;
+            float minDistance = Mathf.Infinity;
+
+            for(int i = 0; i < subdivision; i++)
+            {
+                if(Physics.Raycast(transform.position + offset + height * (i * lerp), direction, out hit, stepDistance, m_groundMask))
+                {
+                    Vector3 localPoint = transform.InverseTransformPoint(hit.point);
+                    if(Vector3.Distance(height, localPoint) < minDistance)
+                    {
+                        minDistance = Vector3.Distance(height, localPoint);
+                        world = hit.point;
+                    }
+                    count++;
+                }
+            }
+
+            var value = stepHeight * Mathf.Clamp01((float)count / subdivision);
+
+            m_stepIterationCount = count;
+
+            var local = Vector3.up * (value + lerp);
+
+            return new Tuple<Vector3, Vector3>(local, world);
+        }
+
+        internal void ResetDirection()
+        {
+            m_lastDirection = Vector3.zero;
+        }
         #endregion
 
         #region GIZMOS
+        private void DrawWireCapsule(Vector3 pos, Quaternion rot, float radius, float height, Color color = default(Color))
+        {
+            if (color != default(Color))
+                Handles.color = color;
+            Matrix4x4 angleMatrix = Matrix4x4.TRS(pos, rot, Handles.matrix.lossyScale);
+            using (new Handles.DrawingScope(angleMatrix))
+            {
+                var pointOffset = (height - (radius * 2)) / 2;
+
+                //Draw sideways
+                Handles.DrawWireArc(Vector3.up * pointOffset, Vector3.left, Vector3.back, -180, radius);
+                Handles.DrawLine(new Vector3(0, pointOffset, -radius), new Vector3(0, -pointOffset, -radius));
+                Handles.DrawLine(new Vector3(0, pointOffset, radius), new Vector3(0, -pointOffset, radius));
+                Handles.DrawWireArc(Vector3.down * pointOffset, Vector3.left, Vector3.back, 180, radius);
+                //Draw frontways
+                Handles.DrawWireArc(Vector3.up * pointOffset, Vector3.back, Vector3.left, 180, radius);
+                Handles.DrawLine(new Vector3(-radius, pointOffset, 0), new Vector3(-radius, -pointOffset, 0));
+                Handles.DrawLine(new Vector3(radius, pointOffset, 0), new Vector3(radius, -pointOffset, 0));
+                Handles.DrawWireArc(Vector3.down * pointOffset, Vector3.back, Vector3.left, -180, radius);
+                //Draw center   
+                Handles.DrawWireDisc(Vector3.up * pointOffset, Vector3.up, radius);
+                Handles.DrawWireDisc(Vector3.down * pointOffset, Vector3.up, radius);
+            }
+        }
+
+        private void DrawWireArrow(Vector3 a, Vector3 b, float arrowheadAngle, float arrowheadDistance, float arrowheadLength)
+        {
+            // Get the Direction of the Vector
+            Vector3 dir = b - a;
+
+            // Get the Position of the Arrowhead along the length of the line.
+            Vector3 arrowPos = a + (dir * arrowheadDistance);
+
+            // Get the Arrowhead Lines using the direction from earlier multiplied by a vector representing half of the full angle of the arrowhead (y)
+            // and -1 for going backwards instead of forwards (z), which is then multiplied by the desired length of the arrowhead lines coming from the point.
+
+            Vector3 up = Quaternion.LookRotation(dir) * new Vector3(0f, Mathf.Sin(arrowheadAngle * Mathf.Deg2Rad), -1f) * arrowheadLength;
+            Vector3 down = Quaternion.LookRotation(dir) * new Vector3(0f, -Mathf.Sin(arrowheadAngle * Mathf.Deg2Rad), -1f) * arrowheadLength;
+            Vector3 left = Quaternion.LookRotation(dir) * new Vector3(Mathf.Sin(arrowheadAngle * Mathf.Deg2Rad), 0f, -1f) * arrowheadLength;
+            Vector3 right = Quaternion.LookRotation(dir) * new Vector3(-Mathf.Sin(arrowheadAngle * Mathf.Deg2Rad), 0f, -1f) * arrowheadLength;
+
+            // Get the End Locations of all points for connecting arrowhead lines.
+            Vector3 upPos = arrowPos + up;
+            Vector3 downPos = arrowPos + down;
+            Vector3 leftPos = arrowPos + left;
+            Vector3 rightPos = arrowPos + right;
+
+            // Draw the line from A to B
+            Gizmos.DrawLine(a, b);
+
+            // Draw the rays representing the arrowhead.
+            Gizmos.DrawRay(arrowPos, up);
+            Gizmos.DrawRay(arrowPos, down);
+            Gizmos.DrawRay(arrowPos, left);
+            Gizmos.DrawRay(arrowPos, right);
+
+            // Draw Connections between rays representing the arrowhead
+            Gizmos.DrawLine(upPos, leftPos);
+            Gizmos.DrawLine(leftPos, downPos);
+            Gizmos.DrawLine(downPos, rightPos);
+            Gizmos.DrawLine(rightPos, upPos);
+
+        }
+
+        private void DrawStepUpGizmo(Vector3 direction, int subdivision) 
+        {
+            RaycastHit hit;
+            var offset = Vector3.up * stepOffset;
+            var height = Vector3.up * stepHeight;
+            var part = subdivision / (1 - stepHeight);
+            var lerp = Vector3.Distance(height, offset) / subdivision;
+
+            for (int i = 0; i < subdivision; i++)
+            {
+                float ratio = stepIterationThreshold / 100f;
+                float value = ratio * stepIteration;
+                Gizmos.color = i <= value ? Color.red : Color.green;
+                if (Physics.Raycast(transform.position + offset + height * (i * lerp), direction, out hit, stepDistance, m_groundMask))
+                {
+                    Gizmos.DrawSphere(hit.point, 0.05f);
+                    Gizmos.DrawRay(transform.position + offset + height * (i * lerp), direction * hit.distance);
+                }
+                else
+                {
+                    Gizmos.DrawRay(transform.position + offset + height * (i * lerp), direction * stepDistance);
+                }
+            }
+
+            Gizmos.DrawSphere(GetStepHitPoint(direction, (int)stepIteration).Item2, 0.05f);
+
+        }
+
         private void OnDrawGizmosSelected()
         {
+            DrawWireCapsule(transform.position, transform.rotation, 0.2f, 0.8f);
+
+            //Movement
+            if(m_movementDirection.magnitude > 0)
+            {
+                Vector3 start = transform.position;
+                Vector3 end = transform.position + RelativeTo(m_movementDirection, m_camera);
+
+                Gizmos.color = Color.blue;
+                DrawWireArrow(start, end, 20, 1, 0.2f);
+
+                float val = Mathf.Lerp(0.001f, speed, m_rigidbody.velocity.magnitude / speed);
+                end = transform.position + ((RelativeTo(m_movementDirection, m_camera)*val)/speed);
+                
+                Gizmos.color = Color.cyan;
+                DrawWireArrow(start, end, 10, 1, 0.2f);
+            }
+
+            //Wall
             Gizmos.color = Color.white;
             Vector3 position = transform.position + (Vector3.up * wallHeight);
             RaycastHit wallHit;
             for (int i = 0; i < 8; i++)
             {
-                Gizmos.DrawLine(position, position + Quaternion.AngleAxis(i * 45, transform.up) * Vector3.forward * wallDistance);
-                if (Physics.Raycast(position, Quaternion.AngleAxis(i * 45, transform.up) * Vector3.forward, out wallHit, wallDistance, m_groundMask))
+                Vector3 angle = Quaternion.AngleAxis(i * 45, transform.up) * Vector3.forward;
+                if (Physics.Raycast(position, angle, out wallHit, wallDistance, m_groundMask))
                 {
                     Gizmos.DrawCube(wallHit.point, Vector3.one * 0.15f);
+                    Gizmos.DrawLine(position, position + angle * wallHit.distance);
+                }
+                else
+                {
+                    Gizmos.DrawLine(position, position + angle * wallDistance);
                 }
             }
 
+            //Ground
             RaycastHit groundHit;
-            if(Physics.SphereCast(transform.position,groundRadius, groundDirection, out groundHit, groundDistance, m_groundMask))
+            if (Physics.SphereCast(transform.position, groundRadius, groundDirection, out groundHit, m_groundDistance, m_groundMask))
             {
                 Gizmos.DrawSphere(groundHit.point, groundRadius);
             }
 
+            //Slope
+            RaycastHit slopeHit;
+            if(Physics.SphereCast(transform.position, slopeRadius, groundDirection, out slopeHit, slopeDistance, m_slopeMask))
+            {
+                Gizmos.color = isSloped ? Color.green : Color.red;
+                Gizmos.DrawWireSphere(slopeHit.point, slopeRadius);
+            }
+
             //Step
-            Gizmos.color = Color.red;
-            bool tmpStep = false;
-            Vector3 bottomStepPos = transform.position - (groundDirection * groundDistance) + new Vector3(0f, 0.05f, 0f);
-
-            RaycastHit stepLowerHit;
-            if (Physics.Raycast(bottomStepPos, Vector3.forward, out stepLowerHit, stepOffset, m_groundMask))
+            //Gizmos.color = isTouchingStep ? Color.green : Color.red;
+            Gizmos.DrawRay(transform.position + Vector3.up * stepOffset, Vector3.up * stepHeight);
+            RaycastHit stepHit;
+            for (int i = -1; i < 2; i++)
             {
-                RaycastHit stepUpperHit;
-                if (RoundValue(stepLowerHit.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, stepHeight, 0f), Vector3.forward, out stepUpperHit, stepDistance + 0.05f, m_groundMask))
+                Vector3 btnPosition = transform.position + Vector3.up * stepOffset;
+                Vector3 direction = Quaternion.AngleAxis(45*i, transform.up) * (transform.forward);
+                Gizmos.DrawRay(btnPosition, direction * stepDistance);
+                if (Physics.Raycast(new Ray(btnPosition, direction), out stepHit, stepDistance, m_groundMask))
                 {
-                    //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                    Gizmos.DrawSphere(stepUpperHit.point, 0.1f);
-                    tmpStep = true;
+                    RaycastHit hit;
+                    if (RoundValue(stepHit.normal.y) == 0 && !Physics.Raycast(btnPosition + Vector3.up * stepHeight, direction, out hit, stepDistance, m_groundMask))
+                    {
+                        DrawStepUpGizmo(direction, (int)stepIteration);
+                    }
+                    else
+                    {
+                        Gizmos.DrawRay(btnPosition + Vector3.up * stepHeight, direction * stepDistance);
+                    }
                 }
             }
+            Gizmos.DrawWireSphere(m_stepHit, 0.3f);
 
-            RaycastHit stepLowerHit45;
-            if (Physics.Raycast(bottomStepPos, Quaternion.AngleAxis(45, transform.up) * Vector3.forward, out stepLowerHit45, stepOffset, m_groundMask))
-            {
-                RaycastHit stepUpperHit45;
-                if (RoundValue(stepLowerHit45.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, stepHeight, 0f), Quaternion.AngleAxis(45, Vector3.up) * Vector3.forward, out stepUpperHit45, stepDistance + 0.05f, m_groundMask))
-                {
-                    //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                    Gizmos.DrawSphere(stepUpperHit45.point, 0.1f);
-                    tmpStep = true;
-                }
-            }
-
-            RaycastHit stepLowerHitMinus45;
-            if (Physics.Raycast(bottomStepPos, Quaternion.AngleAxis(-45, transform.up) * Vector3.forward, out stepLowerHitMinus45, stepOffset, m_groundMask))
-            {
-                RaycastHit stepUpperHitMinus45;
-                if (RoundValue(stepLowerHitMinus45.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, stepHeight, 0f), Quaternion.AngleAxis(-45, Vector3.up) * Vector3.forward, out stepUpperHitMinus45, stepDistance + 0.05f, m_groundMask))
-                {
-                    Gizmos.DrawSphere(stepLowerHitMinus45.point, 0.1f);
-                    //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                    tmpStep = true;
-                }
-            }
         }
-
         #endregion
 
     }
-    /*
-
-            //movement
-            public float speed = 14f;
-            public float speedFactor = 1f;
-            public AnimationCurve speedMultiplierOnAngle = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
-            public float threshold = 0.2f;
-
-            public float dampSpeedUp = 0.2f;
-            public float dampSpeedDown = 0.1f;
-
-            //jump
-            public bool canLongJump;
-            public float jumpVelocity = 20f;
-            public float jumpFallMultiplier = 1.7f;
-            public float jumpHoldMultiplier = 5f;
-            private float coyoteJumpMultiplier = 1f;
-
-            //sprint
-            public float sprintSpeed = 20f;
-
-            public float crouchSpeedMultiplier;
-
-            public float frictionWall;
-            public float frictionGround;
-
-            public Vector3 groundDirectionCheck = Vector3.down;
-            public float groundDirectionLength = 1f;
-            public float groundCheckerThreshold = 0.1f;
-            public float slopeCheckerThreshold = 0.51f;
-            public float stepCheckerThreshold = 0.6f;
-
-            public float maxClimbableSlopeAngle = 53.6f;
-            public float maxStepHeight = 0.74f;
-
-
-            public float canSlideMultiplierCurve = 0.061f;
-            public float cantSlideMultiplierCurve = 0.039f;
-            public float climbingStairsMultiplierCurve = 0.637f;
-
-            public float gravityMultiplier = 6f;
-            public float gravityMultiplyerOnSlideChange = 3f;
-            public float gravityMultiplierIfUnclimbableSlope = 30f;
-
-            public bool lockOnSlope = false;
-
-
-            public float wallCheckerThrashold = 0.8f;
-            public float hightWallCheckerChecker = 0.5f;
-            public float jumpFromWallMultiplier = 30f;
-            public float multiplierVerticalLeap = 1f;
-
-            public float crouchHeightMultiplier = 0.5f;
-            public Vector3 POV_normalHeadHeight = new Vector3(0f, 0.5f, -0.1f);
-            public Vector3 POV_crouchHeadHeight = new Vector3(0f, -0.1f, -0.1f);
-
-
-            public GameObject characterCamera;
-            public GameObject characterModel;
-            public float characterModelRotationSmooth = 0.1f;
-
-            public float targetAngle;
-
-            public Vector2 axisInput;
-
-
-            //Getters
-            public bool isGrounded { private set; get; }
-            public bool isCrouch { private set; get; }
-            public bool isJumping { private set; get; }
-
-
-            //private if stataments
-            private bool m_isTouchingStep = false;
-            private bool m_isTouchingWall = false;
-            private bool m_isTouchingSlope = false;
-            //private
-            [SerializeField][HideInInspector] private LayerMask m_groundMask;
-            private bool m_prevGround;
-            private bool m_lockOnSlope;
-            private bool m_lockRotation;
-            private bool m_crouch;
-            private bool m_sprint;
-            private bool m_jump;
-            private bool m_jumpHold;
-
-            private Vector3 m_globalForward;
-            private Vector3 m_wallNormal;
-            private Vector3 m_prevGroundNormal;
-            private Vector3 m_groundNormal;
-            private Vector3 m_forward;
-            private Vector3 m_reactionForward;
-            private Vector3 m_down;
-            private Vector3 m_globalDown;
-            private Vector3 m_reactionGlobalDown;
-            private Vector3 m_currVelocity;
-
-            private float m_currentSurfaceAngle;
-            private float m_originalColliderHeight;
-            private float m_turnSmoothVelocity;
-
-            //protected
-            protected Rigidbody m_body;
-            protected CapsuleCollider m_collider;
-
-            protected virtual void Awake()
-            {
-                m_body = GetComponent<Rigidbody>();
-                m_collider = GetComponent<CapsuleCollider>();
-                if (m_collider)
-                {
-                    m_originalColliderHeight = m_collider.height;
-                }
-
-                m_lockOnSlope = lockOnSlope;
-
-
-            }
-
-            protected virtual void Start()
-            {
-                this.characterCamera = Camera.main.gameObject;
-            }
-
-            protected virtual void FixedUpdate()
-            {
-                //local
-                CheckGround();
-                CheckStep();
-                CheckWall();
-                CheckSlopeAndDirections();
-
-                //movement
-                MoveCrouch();
-                MoveWalk();
-                MoveRotation();
-                MoveJump();
-
-                //gravity
-                ApplyGravity();
-
-                //events
-            }
-
-            #region CHECKS
-
-            private void CheckGround()
-            {
-                m_prevGround = isGrounded;
-                isGrounded = Physics.CheckSphere(transform.position + groundDirectionCheck, groundCheckerThreshold, m_groundMask);
-            }
-
-            private void CheckStep()
-            {
-                bool tmpStep = false;
-                Vector3 bottomStepPos = transform.position - (groundDirectionCheck * groundCheckerThreshold) + new Vector3(0f, 0.05f, 0f);
-
-                RaycastHit stepLowerHit;
-                if (Physics.Raycast(bottomStepPos, m_globalForward, out stepLowerHit, stepCheckerThreshold, m_groundMask))
-                {
-                    RaycastHit stepUpperHit;
-                    if (RoundValue(stepLowerHit.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, maxStepHeight, 0f), m_globalForward, out stepUpperHit, stepCheckerThreshold + 0.05f, m_groundMask))
-                    {
-                        //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                        tmpStep = true;
-                    }
-                }
-
-                RaycastHit stepLowerHit45;
-                if (Physics.Raycast(bottomStepPos, Quaternion.AngleAxis(45, transform.up) * m_globalForward, out stepLowerHit45, stepCheckerThreshold, m_groundMask))
-                {
-                    RaycastHit stepUpperHit45;
-                    if (RoundValue(stepLowerHit45.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, maxStepHeight, 0f), Quaternion.AngleAxis(45, Vector3.up) * m_globalForward, out stepUpperHit45, stepCheckerThreshold + 0.05f, m_groundMask))
-                    {
-                        //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                        tmpStep = true;
-                    }
-                }
-
-                RaycastHit stepLowerHitMinus45;
-                if (Physics.Raycast(bottomStepPos, Quaternion.AngleAxis(-45, transform.up) * m_globalForward, out stepLowerHitMinus45, stepCheckerThreshold, m_groundMask))
-                {
-                    RaycastHit stepUpperHitMinus45;
-                    if (RoundValue(stepLowerHitMinus45.normal.y) == 0 && !Physics.Raycast(bottomStepPos + new Vector3(0f, maxStepHeight, 0f), Quaternion.AngleAxis(-45, Vector3.up) * m_globalForward, out stepUpperHitMinus45, stepCheckerThreshold + 0.05f, m_groundMask))
-                    {
-                        //rigidbody.position -= new Vector3(0f, -stepSmooth, 0f);
-                        tmpStep = true;
-                    }
-                }
-
-                m_isTouchingStep = tmpStep;
-            }
-
-            private void CheckWall()
-            {
-                bool tmpWall = false;
-                Vector3 tmpWallNormal = Vector3.zero;
-                Vector3 topWallPos = new Vector3(transform.position.x, transform.position.y + hightWallCheckerChecker, transform.position.z);
-
-                RaycastHit wallHit;
-               *//* 
-                if (Physics.Raycast(topWallPos, m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(45, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(90, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(135, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(180, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(225, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(270, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }
-                else if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(315, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                {
-                    tmpWallNormal = wallHit.normal;
-                    tmpWall = true;
-                }*//*
-
-                for (int i = 0; i < 8; i++)
-                {
-                    if (Physics.Raycast(topWallPos, Quaternion.AngleAxis(i * 45, transform.up) * m_globalForward, out wallHit, wallCheckerThrashold, m_groundMask))
-                    {
-                        tmpWallNormal = wallHit.normal;
-                        tmpWall = true;
-                    }
-                }
-
-                m_isTouchingWall = tmpWall;
-                m_wallNormal = tmpWallNormal;
-            }
-
-            private void CheckSlopeAndDirections()
-            {
-                m_prevGroundNormal = m_groundNormal;
-
-                RaycastHit slopeHit;
-                if (Physics.SphereCast(transform.position, slopeCheckerThreshold, Vector3.down, out slopeHit, groundDirectionLength, m_groundMask))
-                {
-                    m_groundNormal = slopeHit.normal;
-
-                    if (slopeHit.normal.y == 1)
-                    {
-
-                        m_forward = Quaternion.Euler(0f, targetAngle, 0f) * Vector3.forward;
-                        m_globalForward = m_forward;
-                        m_reactionForward = m_forward;
-
-                        //SetFriction(frictionAgainstFloor, true);
-                        m_lockOnSlope = lockOnSlope;
-
-                        m_currentSurfaceAngle = 0f;
-                        m_isTouchingSlope = false;
-
-                    }
-                    else
-                    {
-                        //set forward
-                        Vector3 tmpGlobalForward = transform.forward.normalized;
-                        Vector3 tmpForward = new Vector3(tmpGlobalForward.x, Vector3.ProjectOnPlane(transform.forward.normalized, slopeHit.normal).normalized.y, tmpGlobalForward.z);
-                        Vector3 tmpReactionForward = new Vector3(tmpForward.x, tmpGlobalForward.y - tmpForward.y, tmpForward.z);
-
-                        if (m_currentSurfaceAngle <= maxClimbableSlopeAngle && !m_isTouchingStep)
-                        {
-                            //set forward
-                            m_forward = tmpForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * canSlideMultiplierCurve) + 1f);
-                            m_globalForward = tmpGlobalForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * canSlideMultiplierCurve) + 1f);
-                            m_reactionForward = tmpReactionForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * canSlideMultiplierCurve) + 1f);
-
-                            //SetFriction(frictionAgainstFloor, true);
-                            m_lockOnSlope = lockOnSlope;
-                        }
-                        else if (m_isTouchingStep)
-                        {
-                            //set forward
-                            m_forward = tmpForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * climbingStairsMultiplierCurve) + 1f);
-                            m_globalForward = tmpGlobalForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * climbingStairsMultiplierCurve) + 1f);
-                            m_reactionForward = tmpReactionForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * climbingStairsMultiplierCurve) + 1f);
-
-                            //SetFriction(frictionAgainstFloor, true);
-                            m_lockOnSlope = true;
-                        }
-                        else
-                        {
-                            //set forward
-                            m_forward = tmpForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * cantSlideMultiplierCurve) + 1f);
-                            m_globalForward = tmpGlobalForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * cantSlideMultiplierCurve) + 1f);
-                            m_reactionForward = tmpReactionForward * ((speedMultiplierOnAngle.Evaluate(m_currentSurfaceAngle / 90f) * cantSlideMultiplierCurve) + 1f);
-
-                            //SetFriction(0f, true);
-                            m_lockOnSlope = lockOnSlope;
-                        }
-
-                        m_currentSurfaceAngle = Vector3.Angle(Vector3.up, slopeHit.normal);
-                        m_isTouchingSlope = true;
-                    }
-
-                    //set down
-                    m_down = Vector3.Project(Vector3.down, slopeHit.normal);
-                    m_globalDown = Vector3.down.normalized;
-                    m_reactionGlobalDown = Vector3.up.normalized;
-                }
-                else
-                {
-                    m_groundNormal = Vector3.zero;
-
-                    m_forward = Vector3.ProjectOnPlane(transform.forward, slopeHit.normal).normalized;
-                    m_globalForward = m_forward;
-                    m_reactionForward = m_forward;
-
-                    //set down
-                    m_down = Vector3.down.normalized;
-                    m_globalDown = Vector3.down.normalized;
-                    m_reactionGlobalDown = Vector3.up.normalized;
-
-                    //SetFriction(frictionAgainstFloor, true);
-                    m_lockOnSlope = lockOnSlope;
-                }
-            }
-
-            #endregion
-
-            #region MOVEMENT
-
-            private void MoveCrouch()
-            {
-                if (m_crouch && isGrounded)
-                {
-                    isCrouch = true;
-                    *//*if (meshCharacterCrouch != null && meshCharacter != null) meshCharacter.SetActive(false);
-                    if (meshCharacterCrouch != null) meshCharacterCrouch.SetActive(true);
-    *//*
-                    float newHeight = m_originalColliderHeight * crouchHeightMultiplier;
-                    m_collider.height = newHeight;
-                    m_collider.center = new Vector3(0f, -newHeight * crouchHeightMultiplier, 0f);
-
-                    //headPoint.position = new Vector3(transform.position.x + POV_crouchHeadHeight.x, transform.position.y + POV_crouchHeadHeight.y, transform.position.z + POV_crouchHeadHeight.z);
-                }
-                else
-                {
-                    isCrouch = false;
-                    *//*if (meshCharacterCrouch != null && meshCharacter != null) meshCharacter.SetActive(true);
-                    if (meshCharacterCrouch != null) meshCharacterCrouch.SetActive(false);*//*
-
-                    m_collider.height = m_originalColliderHeight;
-                    m_collider.center = Vector3.zero;
-
-                    //headPoint.position = new Vector3(transform.position.x + POV_normalHeadHeight.x, transform.position.y + POV_normalHeadHeight.y, transform.position.z + POV_normalHeadHeight.z);
-                }
-            }
-
-
-            private void MoveWalk()
-            {
-                float crouchMultiplier = 1f;
-                if (isCrouch) crouchMultiplier = crouchSpeedMultiplier;
-
-                if (axisInput.magnitude > threshold)
-                {
-                    targetAngle = Mathf.Atan2(axisInput.x, axisInput.y) * Mathf.Rad2Deg + characterCamera.transform.eulerAngles.y;
-
-
-                    if (!m_sprint)
-                        m_body.velocity = Vector3.SmoothDamp(m_body.velocity, m_forward * speed * crouchMultiplier, ref m_currVelocity, dampSpeedUp);
-                    else
-                        m_body.velocity = Vector3.SmoothDamp(m_body.velocity, m_forward * sprintSpeed * crouchMultiplier, ref m_currVelocity, dampSpeedUp);
-                }
-                else
-                    m_body.velocity = Vector3.SmoothDamp(m_body.velocity, Vector3.zero * crouchMultiplier, ref m_currVelocity, dampSpeedDown);
-            }
-
-
-            private void MoveRotation()
-            {
-                //charactermodel.transform.eulerAngles.z
-                float angle = Mathf.SmoothDampAngle(characterModel.transform.eulerAngles.y, targetAngle, ref m_turnSmoothVelocity, characterModelRotationSmooth);
-                characterModel.transform.rotation = Quaternion.Euler(0f, targetAngle, 0f);
-
-                if (!m_lockRotation) characterModel.transform.rotation = Quaternion.Euler(0f, angle, 0f);
-                else
-                {
-                    var lookPos = -m_wallNormal;
-                    lookPos.y = 0;
-                    var rotation = Quaternion.LookRotation(lookPos);
-                    characterModel.transform.rotation = rotation;
-                }
-            }
-
-
-            private void MoveJump()
-            {
-                //jumped
-                if (m_jump && isGrounded && ((m_isTouchingSlope && m_currentSurfaceAngle <= maxClimbableSlopeAngle) || !m_isTouchingSlope) && !m_isTouchingWall)
-                {
-                    m_body.velocity += Vector3.up * jumpVelocity;
-                    isJumping = true;
-                }
-                //jumped from wall
-                else if (m_jump && !isGrounded && m_isTouchingWall)
-                {
-                    m_body.velocity += m_wallNormal * jumpFromWallMultiplier + (Vector3.up * jumpFromWallMultiplier) * multiplierVerticalLeap;
-                    isJumping = true;
-
-                    targetAngle = Mathf.Atan2(m_wallNormal.x, m_wallNormal.z) * Mathf.Rad2Deg;
-
-                    m_forward = m_wallNormal;
-                    m_globalForward = m_forward;
-                    m_reactionForward = m_forward;
-                }
-
-                //is falling
-                if (m_body.velocity.y < 0 && !isGrounded) coyoteJumpMultiplier = jumpFallMultiplier;
-                else if (m_body.velocity.y > 0.1f && (m_currentSurfaceAngle <= maxClimbableSlopeAngle || m_isTouchingStep))
-                {
-                    //is short jumping
-                    if (!m_jumpHold || !canLongJump) coyoteJumpMultiplier = 1f;
-                    //is long jumping
-                    else coyoteJumpMultiplier = 1f / jumpHoldMultiplier;
-                }
-                else
-                {
-                    isJumping = false;
-                    coyoteJumpMultiplier = 1f;
-                }
-            }
-
-
-            #endregion
-
-            #region GRAVITY
-
-            private void ApplyGravity()
-            {
-                Vector3 gravity = Vector3.zero;
-
-                if (m_lockOnSlope || m_isTouchingStep) gravity = m_down * gravityMultiplier * -Physics.gravity.y * coyoteJumpMultiplier;
-                else gravity = m_globalDown * gravityMultiplier * -Physics.gravity.y * coyoteJumpMultiplier;
-
-                //avoid little jump
-                if (m_groundNormal.y != 1 && m_groundNormal.y != 0 && m_isTouchingSlope && m_prevGroundNormal != m_groundNormal)
-                {
-                    //Debug.Log("Added correction jump on slope");
-                    gravity *= gravityMultiplyerOnSlideChange;
-                }
-
-                //slide if angle too big
-                if (m_groundNormal.y != 1 && m_groundNormal.y != 0 && (m_currentSurfaceAngle > maxClimbableSlopeAngle && !m_isTouchingStep))
-                {
-                    //Debug.Log("Slope angle too high, character is sliding");
-                    if (m_currentSurfaceAngle > 0f && m_currentSurfaceAngle <= 30f) 
-                        gravity = m_globalDown * gravityMultiplierIfUnclimbableSlope * -Physics.gravity.y;
-                    else if (m_currentSurfaceAngle > 30f && m_currentSurfaceAngle <= 89f) 
-                        gravity = m_globalDown * gravityMultiplierIfUnclimbableSlope / 2f * -Physics.gravity.y;
-                }
-
-                //friction when touching wall
-                if (m_isTouchingWall && m_body.velocity.y < 0) gravity *= frictionWall;
-
-                m_body.AddForce(gravity);
-            }
-
-            #endregion
-
-            #region FUNCTIONS
-
-            public void Jump()
-            {
-
-            }
-
-            public void Move(Vector3 input)
-            {
-                this.axisInput = input;
-            }
-
-            #endregion
-
-            private float RoundValue(float _value)
-            {
-                float unit = (float)Mathf.Round(_value);
-
-                if (_value - unit < 0.000001f && _value - unit > -0.000001f) return unit;
-                else return _value;
-            }
-
-            #region DEBUG 
-            [SerializeField][HideInInspector] private bool m_debug;
-
-            private void OnDrawGizmos()
-            {
-                if (m_debug)
-                {
-                    m_body = this.GetComponent<Rigidbody>();
-                    m_collider = this.GetComponent<CapsuleCollider>();
-
-                    Vector3 bottomStepPos = transform.position - new Vector3(0f, m_originalColliderHeight / 2f, 0f) + new Vector3(0f, 0.05f, 0f);
-                    Vector3 topWallPos = new Vector3(transform.position.x, transform.position.y + hightWallCheckerChecker, transform.position.z);
-
-                    //ground and slope
-                    Gizmos.color = Color.blue;
-                    Gizmos.DrawWireSphere(transform.position - new Vector3(0, m_originalColliderHeight / 2f, 0), groundCheckerThreshold);
-
-                    Gizmos.color = Color.green;
-                    Gizmos.DrawWireSphere(transform.position - new Vector3(0, m_originalColliderHeight / 2f, 0), slopeCheckerThreshold);
-
-                    //direction
-                    Gizmos.color = Color.blue;
-                    Gizmos.DrawLine(transform.position, transform.position + m_forward * 2f);
-
-                    Gizmos.color = Color.cyan;
-                    Gizmos.DrawLine(transform.position, transform.position + m_globalForward * 2);
-
-                    Gizmos.color = Color.cyan;
-                    Gizmos.DrawLine(transform.position, transform.position + m_reactionForward * 2f);
-
-                    Gizmos.color = Color.red;
-                    Gizmos.DrawLine(transform.position, transform.position + m_down * 2f);
-
-                    Gizmos.color = Color.magenta;
-                    Gizmos.DrawLine(transform.position, transform.position + m_globalDown * 2f);
-
-                    Gizmos.color = Color.magenta;
-                    Gizmos.DrawLine(transform.position, transform.position + m_reactionGlobalDown * 2f);
-
-                    //step check
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(bottomStepPos, bottomStepPos + m_globalForward * stepCheckerThreshold);
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(bottomStepPos + new Vector3(0f, maxStepHeight, 0f), bottomStepPos + new Vector3(0f, maxStepHeight, 0f) + m_globalForward * (stepCheckerThreshold + 0.05f));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(bottomStepPos, bottomStepPos + Quaternion.AngleAxis(45, transform.up) * (m_globalForward * stepCheckerThreshold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(bottomStepPos + new Vector3(0f, maxStepHeight, 0f), bottomStepPos + Quaternion.AngleAxis(45, Vector3.up) * (m_globalForward * stepCheckerThreshold) + new Vector3(0f, maxStepHeight, 0f));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(bottomStepPos, bottomStepPos + Quaternion.AngleAxis(-45, transform.up) * (m_globalForward * stepCheckerThreshold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(bottomStepPos + new Vector3(0f, maxStepHeight, 0f), bottomStepPos + Quaternion.AngleAxis(-45, Vector3.up) * (m_globalForward * stepCheckerThreshold) + new Vector3(0f, maxStepHeight, 0f));
-
-                    for (int i = 0; i < 8; i++)
-                    {
-                        Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(45*i, transform.up) * (m_globalForward * wallCheckerThrashold));
-                    }
-
-                    //wall check
-                    *//*Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + m_globalForward * wallCheckerThrashold);
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(45, transform.up) * (m_globalForward * wallCheckerThrashold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(90, transform.up) * (m_globalForward * wallCheckerThrashold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(135, transform.up) * (m_globalForward * wallCheckerThrashold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(180, transform.up) * (m_globalForward * wallCheckerThrashold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(225, transform.up) * (m_globalForward * wallCheckerThrashold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(270, transform.up) * (m_globalForward * wallCheckerThrashold));
-
-                    Gizmos.color = Color.black;
-                    Gizmos.DrawLine(topWallPos, topWallPos + Quaternion.AngleAxis(315, transform.up) * (m_globalForward * wallCheckerThrashold));*//*
-                }
-            }
-            #endregion*/
 }

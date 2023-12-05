@@ -1,12 +1,11 @@
 using System.Collections;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.UI;
 
 namespace GameEngine
 {
+    [RequireComponent(typeof(CharacterController))]
     public class PlayerController : MonoBehaviour
     {
         [HideInInspector] public Transform target;
@@ -18,24 +17,58 @@ namespace GameEngine
         [HideInInspector] public ControlLimit pitchControlLimit = new ControlLimit(-45,45);
         [HideInInspector] public ControlLimit yawControlLimit = new ControlLimit(-180, 180);
 
+        //cursor
         [HideInInspector] public bool cursorVisible = true;
         [HideInInspector] public CursorLockMode cursorLockMode;
 
+        //Jump
         [HideInInspector] public bool jumpHold = false;
         [HideInInspector] public float jumpHoldSmooth = 2f;
         [HideInInspector] public float jumpHoldMin = 1.0f;
         [HideInInspector] public float jumpHoldMax = 2.2f;
+        [HideInInspector] public float jumpDrain = 25f;
 
+        //Sprint
+        [HideInInspector] public bool sprintHold = false;
+        [HideInInspector] public float sprintDrain = 15f;
+
+        //crouch
+        [HideInInspector] public bool crouchHold = false;
+        [HideInInspector] public float crouchDrain = 5f;
+
+        //movement
+        [HideInInspector] public bool movementRootMotion = false;
+        [HideInInspector] public float movementDrain = 1f;
+        [HideInInspector] public float movementScrollFactor = 0.01f;
+
+        //prone
+        [HideInInspector] public bool proneHold;
+        [HideInInspector] public float proneDrain = 10f;
+
+        public Vector3 direction { internal set; get; }
+
+
+        //components
+        private CharacterController m_character;
+        private Rigidbody m_rigidbody;
+        private Stamina m_stamina;
+
+        //values
         private Vector3 m_look;
         private Quaternion m_axisDelta;
-        private CharacterController m_controller;
-        private CharacterControllerEvent m_controllerEvent;
         private bool m_jumpHolded = false;
         private float m_jumpHoldValue = 0f;
+        private bool m_sprintValue;
+        private bool m_crouchValue;
+
+        private float m_speedFactor;
 
         void Start()
         {
-            m_controller = GetComponent<CharacterController>();
+            m_stamina = GetComponent<Stamina>();
+            m_character = GetComponent<CharacterController>();
+            m_rigidbody = GetComponent<Rigidbody>();
+
             Cursor.lockState = cursorLockMode;
             Cursor.visible = cursorVisible;
         }
@@ -60,9 +93,16 @@ namespace GameEngine
 
             if (m_jumpHolded)
             {
-                m_jumpHoldValue += Time.deltaTime;
+                m_jumpHoldValue += Time.deltaTime * jumpHoldSmooth;
                 m_jumpHoldValue = Mathf.Clamp(m_jumpHoldValue, jumpHoldMin, jumpHoldMax);
             }
+
+            if(m_rigidbody.velocity.magnitude == 0 || !m_character.isGrounded)
+            {
+                m_stamina.RemoveDrain("move");
+                m_stamina.RemoveDrain("sprint");
+            }
+
         }
 
         #region INTERNAL
@@ -82,28 +122,76 @@ namespace GameEngine
         #region INPUT
         private void OnMovement(InputValue value)
         {
-            m_controller.Move(value.Get<Vector2>());
-            if(m_controllerEvent)
-                m_controllerEvent.OnMovement.Invoke(value.Get<Vector2>());
+            Vector2 axis = value.Get<Vector2>();
+            bool isPressed = axis.magnitude > 0;
+            direction = new Vector3(axis.x, 0f, axis.y);
+
+            if (movementRootMotion) 
+                return;
+
+            if (m_stamina)
+            {
+                if(isPressed) 
+                { m_stamina.AddDrain("move", movementDrain); } 
+                else 
+                { m_stamina.RemoveDrain("move"); }
+
+                if (!m_stamina.isEmpty)
+                {
+                    m_character.Move(axis);
+                }
+                else
+                {
+                    m_character.Move(Vector3.zero);
+                    return;
+                }
+            }
+            else
+            {
+                m_character.Move(axis);
+            }
+        }
+
+        private void OnMovementSpeed(InputValue value) 
+        {
+            m_speedFactor += value.Get<float>() * movementScrollFactor;
+            m_character.speedFactor = m_speedFactor;
         }
 
         private void OnJump(InputValue value)
         {
             if (!jumpHold)
             {
-                m_controller.Jump();
-                if (m_controllerEvent)
-                    m_controllerEvent.OnJumpStart.Invoke();
+                if (m_stamina && value.isPressed)
+                {
+                    if (m_character.canJump && m_stamina.Use(jumpDrain))
+                    {
+                        m_character.Jump();
+                    }
+                }
             }
             else
             {
                 m_jumpHolded = value.isPressed;
-                if(!value.isPressed)
+                if (m_stamina)
                 {
-                    m_controller.Jump(m_jumpHoldValue);
-                    m_jumpHoldValue = 0;
-                    if (m_controllerEvent)
-                        m_controllerEvent.OnJumpStart.Invoke();
+                    if (m_character.canJump && !value.isPressed)
+                    {
+                        if (m_stamina.Use(jumpDrain))
+                        {
+                            float factor = m_stamina.GetStaminaFillAmount(1f);
+                            m_character.Jump(m_jumpHoldValue * factor);
+                            m_jumpHoldValue = 0;
+                        }
+                    }
+                }
+                else
+                {
+                    if (m_character.canJump && !value.isPressed)
+                    {
+                        m_character.Jump(m_jumpHoldValue);
+                        m_jumpHoldValue = 0;
+                    }
                 }
             }
 
@@ -113,7 +201,107 @@ namespace GameEngine
         {
             m_look = value.Get<Vector2>();
         }
+
+        private void OnSprint(InputValue value)
+        {
+            if (sprintHold)
+            {
+                if(value.isPressed)
+                {
+                    if (m_stamina)
+                        m_stamina.AddDrain("sprint", sprintDrain);
+
+                    m_character.Sprint(true);
+                }
+                else
+                {
+                    if (m_stamina)
+                        m_stamina.RemoveDrain("sprint");
+
+                    m_character.Sprint(false);
+                }
+            }
+            else
+            {
+                if (value.isPressed)
+                {
+                    m_sprintValue = !m_sprintValue;
+
+                    if (m_stamina)
+                    {
+                        if (m_sprintValue)
+                            m_stamina.AddDrain("sprint", sprintDrain);
+                        else
+                            m_stamina.RemoveDrain("sprint");
+                    }
+
+                    m_character.Sprint(m_sprintValue);
+                }
+            }
+
+            
+        }
+
+        private void OnCrouch(InputValue value)
+        {
+            if (m_stamina)
+            {
+                if (m_character.isCrouch)
+                    m_stamina.AddDrain("crouch", crouchDrain);
+                else
+                    m_stamina.RemoveDrain("crouch");
+            }
+
+            if (crouchHold)
+            {
+                m_character.Crouch(value.isPressed);
+            }
+            else
+            {
+                if (value.isPressed)
+                {
+                    m_crouchValue = !m_crouchValue;
+                    m_character.Crouch(m_crouchValue);
+                }
+            }
+        }
+
+        private void OnProne(InputValue value)
+        {
+            if (m_stamina)
+            {
+                if (m_character.isProne)
+                    m_stamina.AddDrain("prone", proneDrain);
+                else
+                    m_stamina.RemoveDrain("prone");
+
+                if (!m_stamina.ContainDrain("prone"))
+                    return;
+            }
+
+            if (proneHold)
+            {
+                m_character.Prone(value.isPressed);
+            }
+            else
+            {
+                if (value.isPressed)
+                {
+                    m_character.Prone();
+                }
+            }
+        }
         #endregion
+
+        #region PUBLIC
+
+        public float GetJumpFillAmount(float scale = 100f)
+        {
+            return Mathf.Clamp01(m_jumpHoldValue / jumpHoldMax) * scale;
+        }
+
+        #endregion
+
     }
 
     [System.Serializable]

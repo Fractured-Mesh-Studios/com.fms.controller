@@ -1,17 +1,21 @@
+using GameEngine;
+using NUnit.Framework;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEditor;
-
 using UnityEngine;
+
+using CharacterController = GameEngine.CharacterController;
 
 namespace GameEditor
 {
     [CustomEditor(typeof(GameEngine.CharacterController))]
     public class CharacterControllerEditor : BaseEditor
     {
-        private GameEngine.CharacterController m_target;
+        private CharacterController m_target;
         private Rigidbody m_rigidbody;
         private CapsuleCollider m_capsuleCollider;
+        private Stamina m_stamina;
 
         private bool m_jumpTab;
         private bool m_wallTab;
@@ -19,12 +23,14 @@ namespace GameEditor
         private bool m_movementTab;
         private bool m_stepSlopeTab;
         private bool m_infoTab;
+        private int m_toolBar;
 
         private GUIContent m_content;
 
         private void OnEnable()
         {
-            m_target = (GameEngine.CharacterController)target;
+            m_target = (CharacterController)target;
+            m_stamina = m_target.GetComponent<Stamina>();
             m_rigidbody = m_target.GetComponent<Rigidbody>();
             m_capsuleCollider = m_target.GetComponent<CapsuleCollider>();
         }
@@ -49,6 +55,40 @@ namespace GameEditor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("dampSpeedUp"));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("dampSpeedDown"));
                 m_target.airControl = EditorGUILayout.Slider("Air Control",m_target.airControl, 0f, 1f);
+
+                GUILayout.Space(10);
+                Separator(Color.grey);
+                m_toolBar = GUILayout.Toolbar(m_toolBar, new string[] { "Crouch", "Prone", "Sprint" });
+
+
+                //Stance(serializedObject.FindProperty("stances"));
+
+                switch (m_toolBar)
+                {
+                    case 0:
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("crouch"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("crouchSpeed"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("crouchSpeedFactor"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("crouchHeight"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("crouchRadius"));
+                        break;
+                    case 1: 
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("prone"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("proneSpeed"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("proneSpeedFactor"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("proneHeight"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("proneRadius"));
+                        break;
+                    case 2:
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("sprint"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("sprintSpeed"));
+                        EditorGUILayout.PropertyField(serializedObject.FindProperty("sprintSpeedFactor"));
+                        break;
+                    case 3: break;
+                    case 4: break;
+                }
+
+                StaminaBox("Stamina Movement Drain Enabled");
             }
             EditorGUI.indentLevel = 0;
             EditorGUILayout.EndVertical();
@@ -98,33 +138,20 @@ namespace GameEditor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("stepOffset"));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("stepHeight"));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("stepDistance"));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty("stepSpringForce"));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty("stepSpringDamp"));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty("stepSpringMin"));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty("stepSpringMax"));
-                EditorGUILayout.BeginVertical("Box");
+                EditorGUILayout.PropertyField(serializedObject.FindProperty("stepSmooth"));
                 m_content = new GUIContent("Step Iteration", "This value controls how accurately the edges of the stairs are detected to calculate their altitude and process the vector projected at the angle of the stairs.");
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("stepIteration"), m_content);
-                m_content = new GUIContent("","This value controls whether the force is applied if the height of the stairs is greater than this.");
-                m_target.stepIterationThreshold = (uint)EditorGUILayout.IntSlider(m_content, (int)m_target.stepIterationThreshold, 1, 100);
-                float ratio = m_target.stepIterationThreshold / 100f;
-                float value = ratio * m_target.stepIteration;
-                EditorGUI.ProgressBar(EditorGUILayout.GetControlRect(), ratio, ratio * 100f + " % (Percent)");
-                EditorGUI.ProgressBar(EditorGUILayout.GetControlRect(), ratio, value + " ° (Iterations)");
-                EditorGUILayout.EndVertical();
-
+                EditorGUILayout.PropertyField(serializedObject.FindProperty("stepForceMode"));
 
                 GUILayout.Space(10f);
                 EditorGUILayout.BeginHorizontal("Box");
                 if (GUILayout.Button("Spring Setup"))
                 {
                     float mass = m_rigidbody.mass <= 30 ? 80 : m_rigidbody.mass;
-                    m_target.stepSpringForce = mass * 1.8f;
-                    m_target.stepSpringDamp = mass * 0.2f;
                     m_target.stepDistance = 1f;
                     m_target.stepOffset = (m_capsuleCollider.height / -2f) * 0.9f;
                     m_target.stepIteration = 15;
-                    m_target.stepIterationThreshold = 20;
+                    m_target.stepSmooth = 1f;
                 }
                 EditorGUILayout.EndHorizontal();
             }
@@ -144,6 +171,8 @@ namespace GameEditor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpCount"));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpDelay"));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty("jumpMemory"));
+
+                StaminaBox("Stamina Jump Drain Enabled");
             }
             EditorGUI.indentLevel = 0;
             EditorGUILayout.EndVertical();
@@ -197,6 +226,59 @@ namespace GameEditor
 
             serializedObject.ApplyModifiedProperties();
         }
+
+        private void StaminaBox(string text)
+        {
+            if (m_stamina)
+            {
+                GUILayout.Space(5);
+                EditorGUILayout.HelpBox(text, MessageType.Warning);
+            }
+        }
+
+       /* private void Stance(SerializedProperty stance)
+        {
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Add"))
+            {
+                m_target.stances.Add(new Stance("Stance "+m_target.stances.Count, Random.Range(2,10)));
+            }
+            if(GUILayout.Button("Remove Last"))
+            {
+                m_target.stances.Remove(m_target.stances[m_target.stances.Count-1]);
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if(m_target.stances.Count > 0)
+            {
+                List<string> names = new List<string>();
+                for(int i = 0; i < m_target.stances.Count; i++)
+                {
+                    names.Add(m_target.stances[i].name);    
+                }
+
+                m_toolBar = GUILayout.Toolbar(m_toolBar, names.ToArray());
+
+            }
+
+
+            EditorGUILayout.BeginVertical("Box");
+
+            for(int i = 0; i < stance.arraySize; i++)
+            {
+                var element = stance.GetArrayElementAtIndex(i);
+                if(i == m_toolBar)
+                {
+                    EditorGUILayout.PropertyField(element.FindPropertyRelative("name"));
+                    EditorGUILayout.PropertyField(element.FindPropertyRelative("speed"));
+                    EditorGUILayout.PropertyField(element.FindPropertyRelative("factor"));
+                }
+            }
+
+            EditorGUILayout.EndVertical ();
+        }*/
+
 
         private void OnSceneGUI()
         {

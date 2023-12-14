@@ -2,7 +2,7 @@
     "name": "Controller-Editor",
     "rootNamespace": "GameEditor",
     "references": [
-        "GUID:068f2ce999b37394da97eb183465c37a",
+        "GUID:4c5bd7a66b372c841a4df230ba7e8cc7",
         "GUID:75469ad4d38634e559750d17036d5f7c"
     ],
     "includePlatforms": [

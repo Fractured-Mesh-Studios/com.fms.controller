@@ -223,17 +223,20 @@ namespace GameEngine
         #region GIZMOS
         private void OnDrawGizmosSelected()
         {
-            for (int i = 0; i < waypoints.Length; i++)
+            if(waypoints != null)
             {
-                if(i == 0) Gizmos.color = Color.green;
-                else if(i ==  waypoints.Length-1) Gizmos.color = Color.red;
-                else Gizmos.color = Color.white;
-
-                Gizmos.DrawSphere(waypoints[i], 0.2f);
-                if (i >= 0 && i < waypoints.Length-1)
+                for (int i = 0; i < waypoints.Length; i++)
                 {
-                    Gizmos.color = Color.white;
-                    Gizmos.DrawLine(waypoints[i], waypoints[i+1]);
+                    if(i == 0) Gizmos.color = Color.green;
+                    else if(i ==  waypoints.Length-1) Gizmos.color = Color.red;
+                    else Gizmos.color = Color.white;
+
+                    Gizmos.DrawSphere(waypoints[i], 0.2f);
+                    if (i >= 0 && i < waypoints.Length-1)
+                    {
+                        Gizmos.color = Color.white;
+                        Gizmos.DrawLine(waypoints[i], waypoints[i+1]);
+                    }
                 }
             }
 
